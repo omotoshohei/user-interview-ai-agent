@@ -1,3 +1,4 @@
 .env
-.venv
-font
+.venv/
+.DS_Store
+output/

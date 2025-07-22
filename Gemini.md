@@ -22,7 +22,7 @@ Our interactions will generally fall into three categories:
 
 ### Generating PDF Reports
 
-A new script, `script/convert_md_to_pdf.py`, has been added to convert Markdown reports to PDF format. This script utilizes `GenShinGothic` fonts located in the `font/` directory for proper Japanese character display.
+A new script, `script/convert_md_to_pdf.py`, has been added to convert Markdown reports to PDF format. This script utilizes `markdown-it-py` and `weasyprint` to create styled PDFs with proper headings and fonts.
 
 To convert a Markdown report (e.g., `output/20250722-do-you-like-nike.md`) to PDF, use the following command:
 
@@ -30,4 +30,4 @@ To convert a Markdown report (e.g., `output/20250722-do-you-like-nike.md`) to PD
 .venv/bin/python script/convert_md_to_pdf.py output/20250722-do-you-like-nike.md
 ```
 
-**Note:** Ensure the `reportlab` library is installed in your virtual environment (`.venv/bin/pip install reportlab`) and that the `font/` directory contains `GenShinGothic-Regular.ttf` and `GenShinGothic-Bold.ttf` for optimal display of Japanese characters.
+**Note:** Ensure the `markdown-it-py` and `weasyprint` libraries are installed in your virtual environment (`.venv/bin/pip install -r requirements.txt`) and that the `font/` directory contains `GenShinGothic-Regular.ttf` and `GenShinGothic-Bold.ttf` for optimal display of Japanese characters.
