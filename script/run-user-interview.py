@@ -3,6 +3,8 @@ from typing import Annotated, Any, Optional
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
+from langchain_core.caches import BaseCache
+ChatOpenAI.model_rebuild()
 from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field
 import os
@@ -72,7 +74,7 @@ class PersonaGenerator:
                 ),
                 (
                     "human",
-                    f"以下のユーザーリクエストに関するインタビュー用に、{self.k}人の多様なペルソナを生成してください。\n\n"
+                    f"以下のユーザーリクエストに関するインタビュー用に、{self.k}人の多様なペルソナを生成してください.\n\n"
                     "トピック: {user_request}\n\n"
                     "各ペルソナには名前と簡単な背景を含めてください。年齢、性別、職業、トピックに対する知識レベルにおいて多様性を確保してください。",
                 ),
@@ -279,20 +281,38 @@ class DocumentationAgent:
         # 最終的な要件定義書の取得
         return final_state["output_doc"]
 
+import argparse
+from datetime import datetime
+
 # メイン関数
 def main():
-    # ユーザー入力を受け取る
-    user_request = input("ユーザーインタビューの議題を教えてください: ")
-    k = 3  # ペルソナの人数（必要に応じて変更可能）
+    # コマンドライン引数を解析
+    parser = argparse.ArgumentParser(description="ユーザーインタビューAIエージェント")
+    parser.add_argument("--user-request", type=str, required=True, help="ユーザーインタビューの議題")
+    parser.add_argument("--k", type=int, default=3, help="生成するペルソナの人数")
+    parser.add_argument("--model-name", type=str, default="gpt-4.1-mini-2025-04-14", help="使用するOpenAIモデル名")
+    args = parser.parse_args()
 
     # ChatOpenAIモデルを初期化
-    llm = ChatOpenAI(model_name="gpt-4.1-mini-2025-04-14", temperature=0.3)
-    # llm = ChatOpenAI(model_name="gpt-4.1-2025-04-14", temperature=0.3)
+    llm = ChatOpenAI(model_name=args.model_name, temperature=0.3)
 
     # 要件定義書生成AIエージェントを初期化
-    agent = DocumentationAgent(llm=llm, k=k)
+    agent = DocumentationAgent(llm=llm, k=args.k)
     # エージェントを実行して最終的な出力を取得
-    final_output = agent.run(user_request=user_request)
+    final_output = agent.run(user_request=args.user_request)
+
+    # 出力ディレクトリを作成
+    output_dir = "output"
+    os.makedirs(output_dir, exist_ok=True)
+
+    # ファイル名を生成
+    date_str = datetime.now().strftime("%Y%m%d")
+    topic_str = args.user_request.lower().replace(' ', '-')
+    file_name = f"{date_str}-{topic_str}.md"
+    output_path = os.path.join(output_dir, file_name)
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(final_output)
+    print(f"ユーザーインタビューのレポートが '{output_path}' に保存されました。")
 
     # 最終的な出力を表示
     print(final_output)
