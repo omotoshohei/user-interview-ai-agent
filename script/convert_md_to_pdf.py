@@ -6,10 +6,6 @@ from weasyprint import HTML, CSS
 
 # Function to convert markdown to PDF
 def convert_md_to_pdf(md_content: str, output_pdf_path: str):
-    # Add a timestamp to the output file name
-    timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-    output_pdf_path = f"{os.path.splitext(output_pdf_path)[0]}-{timestamp}.pdf"
-
     # Convert markdown to HTML
     md = MarkdownIt()
     html_content = md.render(md_content)
@@ -42,7 +38,7 @@ def convert_md_to_pdf(md_content: str, output_pdf_path: str):
         }
     ''')
 
-    # Create PDF
+    # Create PDF (no timestamp added)
     HTML(string=html_content).write_pdf(output_pdf_path, stylesheets=[css])
     print(f"Successfully converted markdown to {output_pdf_path}")
 
@@ -55,7 +51,11 @@ def main():
         print(f"Error: File not found at {args.markdown_file}")
         return
 
-    output_pdf_path = os.path.join('output', os.path.basename(os.path.splitext(args.markdown_file)[0]) + ".pdf")
+    # basename.stem + ".pdf" → e.g. "20250726-do-you-like-starbucks?.pdf"
+    base_name = os.path.splitext(os.path.basename(args.markdown_file))[0]
+    output_dir = "output"
+    os.makedirs(output_dir, exist_ok=True)
+    output_pdf_path = os.path.join(output_dir, f"{base_name}.pdf")
 
     with open(args.markdown_file, 'r', encoding='utf-8') as f:
         md_content = f.read()

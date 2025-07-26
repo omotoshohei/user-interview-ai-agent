@@ -60,7 +60,7 @@ class InterviewState(BaseModel):
 
 # ペルソナを生成するクラス
 class PersonaGenerator:
-    def __init__(self, llm: ChatOpenAI, k: int = 3):
+    def __init__(self, llm: ChatOpenAI, k: int = 10):
         self.llm = llm.with_structured_output(Personas)
         self.k = k
 
@@ -180,8 +180,9 @@ class InterviewConductor:
 
 # 要件定義書を生成するクラス
 class RequirementsDocumentGenerator:
-    def __init__(self, llm: ChatOpenAI):
+    def __init__(self, llm: ChatOpenAI, k: int):
         self.llm = llm
+        self.k = k
 
     def run(self, user_request: str, interviews: list[Interview]) -> str:
         # プロンプトを定義
@@ -197,12 +198,12 @@ class RequirementsDocumentGenerator:
                     "Theme: {user_request}\n\n"
                     "Interview Result:\n{interview_results}\n"
                     "Output structure:\n"
-                    "1. Executive Summary\n"
-                    "2. Quantitative Stats (theme | mentions | % of 10) – list top 5‑7 themes\n"
-                    "3. Key Qualitative Insights (organised by theme, incl. 1‑2 persona quotes)\n"
-                    "4. Example Personas (3)\n"
-                    "5. Recommended Next Actions\n\n"
-                    "Language is to be English\n\n:",
+                    "## Executive Summary\n"
+                    "## Quantitative Stats (theme | mentions | % of 10) – list top 5‑7 themes\n"
+                    "## Key Qualitative Insights (organised by theme, incl. 1‑2 persona quotes)\n"
+                    f"## Example Personas (Generate {self.k} distinct personas based on the interviews)\n"
+                    "## Recommended Next Actions\n\n"
+                    "Language is to be English\n\n:"
                 ),
             ]
         )
@@ -228,7 +229,7 @@ class DocumentationAgent:
         self.persona_generator = PersonaGenerator(llm=llm, k=k)
         self.interview_conductor = InterviewConductor(llm=llm)
         # self.information_evaluator = InformationEvaluator(llm=llm)
-        self.requirements_generator = RequirementsDocumentGenerator(llm=llm)
+        self.requirements_generator = RequirementsDocumentGenerator(llm=llm, k=k)
 
         # グラフの作成
         self.graph = self._create_graph()
@@ -261,7 +262,7 @@ class DocumentationAgent:
     def _conduct_interviews(self, state: InterviewState) -> dict[str, Any]:
         # インタビューの実施
         new_interviews: InterviewResult = self.interview_conductor.run(
-            state.user_request, state.personas[-5:]
+            state.user_request, state.personas[-10:]
         )
         return {"interviews": new_interviews.interviews}
 
@@ -289,7 +290,7 @@ def main():
     # コマンドライン引数を解析
     parser = argparse.ArgumentParser(description="ユーザーインタビューAIエージェント")
     parser.add_argument("--user-request", type=str, required=True, help="ユーザーインタビューの議題")
-    parser.add_argument("--k", type=int, default=3, help="生成するペルソナの人数")
+    parser.add_argument("--k", type=int, default=10, help="生成するペルソナの人数")
     parser.add_argument("--model-name", type=str, default="gpt-4.1-mini-2025-04-14", help="使用するOpenAIモデル名")
     args = parser.parse_args()
 
@@ -301,6 +302,10 @@ def main():
     # エージェントを実行して最終的な出力を取得
     final_output = agent.run(user_request=args.user_request)
 
+    # Add the title to the output
+    title = f"# User Interview - {args.user_request}\n\n"
+    final_output_with_title = title + final_output
+
     # 出力ディレクトリを作成
     output_dir = "output"
     os.makedirs(output_dir, exist_ok=True)
@@ -311,11 +316,11 @@ def main():
     file_name = f"{date_str}-{topic_str}.md"
     output_path = os.path.join(output_dir, file_name)
     with open(output_path, "w", encoding="utf-8") as f:
-        f.write(final_output)
+        f.write(final_output_with_title)
     print(f"ユーザーインタビューのレポートが '{output_path}' に保存されました。")
 
     # 最終的な出力を表示
-    print(final_output)
+    print(final_output_with_title)
 
 if __name__ == "__main__":
     main()
