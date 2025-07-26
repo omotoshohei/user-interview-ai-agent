@@ -18,7 +18,7 @@ Our interactions will generally fall into three categories:
 
 1.  **Consultation:** For general questions, advice, or discussions related to application development, architecture, or problem-solving.
 2.  **Coding:** For tasks involving writing, modifying, or refactoring code to build or enhance applications.
-3.  **Verification/Deployment:** For tasks related to testing, verifying functionality, or deploying applications.
+3.  **Verification/Deployment/Run the script:** For tasks related to testing, verifying functionality, or deploying applications, Run the script.
 
 ### Generating PDF Reports
 
