@@ -1,2 +1,42 @@
+# Environment
 .env
 .venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Output (ignore generated outputs, examples tracked separately)
+output/
+
+# Fonts (large binary files - download separately)
+font/*.ttf
+
+# Claude Code
+.claude/

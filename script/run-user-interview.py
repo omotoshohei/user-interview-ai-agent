@@ -19,17 +19,7 @@ except ImportError:
 ################################################
 
 
-# ペルソナを表すデータモデル
-class Persona(BaseModel):
-    name: str = Field(..., description="ペルソナの名前")
-    background: str = Field(..., description="ペルソナの持つ背景")
-
-
-# ペルソナのリストを表すデータモデル
-class Personas(BaseModel):
-    personas: list[Persona] = Field(
-        default_factory=list, description="ペルソナのリスト"
-    )
+from shared import Persona, Personas
 
 
 # インタビュー内容を表すデータモデル
@@ -184,7 +174,37 @@ class RequirementsDocumentGenerator:
         self.llm = llm
         self.k = k
 
-    def run(self, user_request: str, interviews: list[Interview]) -> str:
+    def run(self, user_request: str, personas: list[Persona], interviews: list[Interview]) -> str:
+        report = []
+
+        # Research Outline
+        report.append("## Research Outline\n\n")
+        report.append(f"**Topic:** {user_request}\n\n")
+        report.append("**Method:** Persona-based User Interview Simulation\n\n")
+        report.append(f"**Number of Personas:** {len(personas)}\n\n")
+        report.append("---\n\n")
+
+        # Generated Personas
+        report.append("## Generated Personas\n\n")
+        for i, persona in enumerate(personas, 1):
+            report.append(f"**Persona {i}: {persona.name}**\n")
+            report.append(f"- Background: {persona.background}\n\n")
+
+        # Interview Details
+        report.append("## Interview Details\n\n")
+        for interview in interviews:
+            report.append(f"### {interview.persona.name}\n")
+            report.append(f"*{interview.persona.background}*\n\n")
+            report.append(f"**Q:** {interview.question}\n\n")
+            report.append(f"**A:** {interview.answer}\n\n")
+
+        # Generate insights summary using LLM
+        insights = self._generate_insights(user_request, interviews)
+        report.append(insights)
+
+        return "".join(report)
+
+    def _generate_insights(self, user_request: str, interviews: list[Interview]) -> str:
         # プロンプトを定義
         prompt = ChatPromptTemplate.from_messages(
             [
@@ -199,9 +219,8 @@ class RequirementsDocumentGenerator:
                     "Interview Result:\n{interview_results}\n"
                     "Output structure:\n"
                     "## Executive Summary\n"
-                    "## Quantitative Stats (theme | mentions | % of 10) – list top 5‑7 themes\n"
+                    "## Quantitative Stats (theme | mentions | % of {k}) – list top 5‑7 themes\n"
                     "## Key Qualitative Insights (organised by theme, incl. 1‑2 persona quotes)\n"
-                    f"## Example Personas (Generate {self.k} distinct personas based on the interviews)\n"
                     "## Recommended Next Actions\n\n"
                     "Language is to be English\n\n:"
                 ),
@@ -213,9 +232,10 @@ class RequirementsDocumentGenerator:
         return chain.invoke(
             {
                 "user_request": user_request,
+                "k": self.k,
                 "interview_results": "\n".join(
-                    f"ペルソナ: {i.persona.name} - {i.persona.background}\n"
-                    f"質問: {i.question}\n回答: {i.answer}\n"
+                    f"Persona: {i.persona.name} - {i.persona.background}\n"
+                    f"Question: {i.question}\nAnswer: {i.answer}\n"
                     for i in interviews
                 ),
             }
@@ -270,7 +290,7 @@ class DocumentationAgent:
     def _generate_output(self, state: InterviewState) -> dict[str, Any]:
         # インタビュー結果のドキュメント生成
         output_doc: str = self.requirements_generator.run(
-            state.user_request, state.interviews
+            state.user_request, state.personas, state.interviews
         )
         return {"output_doc": output_doc}
 
@@ -291,6 +311,7 @@ def main():
     parser = argparse.ArgumentParser(description="ユーザーインタビューAIエージェント")
     parser.add_argument("--user-request", type=str, required=True, help="ユーザーインタビューの議題")
     parser.add_argument("--k", type=int, default=10, help="生成するペルソナの人数")
+    parser.add_argument("--output-name", type=str, help="Custom output filename (without extension)")
     parser.add_argument("--model-name", type=str, default="gpt-4.1-mini-2025-04-14", help="使用するOpenAIモデル名")
     args = parser.parse_args()
 
@@ -307,13 +328,16 @@ def main():
     final_output_with_title = title + final_output
 
     # 出力ディレクトリを作成
-    output_dir = "output"
+    output_dir = "output/general-question"
     os.makedirs(output_dir, exist_ok=True)
 
     # ファイル名を生成
     date_str = datetime.now().strftime("%Y%m%d")
-    topic_str = args.user_request.lower().replace(' ', '-')
-    file_name = f"{date_str}-{topic_str}.md"
+    if args.output_name:
+        file_name = f"{date_str}-{args.output_name}.md"
+    else:
+        topic_str = args.user_request.lower().replace(' ', '-')
+        file_name = f"{date_str}-{topic_str}.md"
     output_path = os.path.join(output_dir, file_name)
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(final_output_with_title)
