@@ -11,7 +11,7 @@ ChatOpenAI.model_rebuild()
 from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field
 
-from shared import Persona
+from shared import Persona, LanguageCode, t, p
 
 ###### Use dotenv if available ######
 try:
@@ -69,6 +69,7 @@ class TranslationEvaluationState(BaseModel):
     """State for the translation evaluation agent."""
     source_text: str = Field(..., description="Original English text")
     translated_text: str = Field(..., description="Japanese translation to evaluate")
+    language: LanguageCode = Field(default="jp", description="Output language")
     personas: Annotated[list[TranslationPersona], operator.add] = Field(
         default_factory=list, description="Generated personas"
     )
@@ -82,26 +83,14 @@ class TranslationEvaluationState(BaseModel):
 class TranslationPersonaGenerator:
     """Generates reader perspective personas for translation evaluation."""
 
-    def __init__(self, llm: ChatOpenAI):
+    def __init__(self, llm: ChatOpenAI, lang: LanguageCode = "jp"):
         self.llm = llm.with_structured_output(TranslationPersonas)
+        self.lang = lang
 
     def run(self, source_text: str) -> TranslationPersonas:
         prompt = ChatPromptTemplate.from_messages([
-            (
-                "system",
-                "あなたはマーケティングコンテンツの日本語翻訳を評価するための読者ペルソナを作成する専門家です。"
-                "3人の異なる読者視点のペルソナを生成してください。"
-            ),
-            (
-                "human",
-                "以下の英語マーケティングテキストの日本語翻訳を評価するための3人のペルソナを生成してください:\n\n"
-                "原文: {source_text}\n\n"
-                "以下の3タイプの読者ペルソナを作成してください:\n"
-                "1. **ビジネスプロフェッショナル** (30-40代): フォーマルなビジネス文書を日常的に読む人\n"
-                "2. **若年層** (20代): カジュアルな表現に敏感で、SNSなどで最新の言葉遣いに触れている人\n"
-                "3. **一般消費者** (幅広い年齢層): 広告やマーケティング資料を一般的な視点で読む人\n\n"
-                "各ペルソナには名前、背景、年齢層、読書コンテキストを含めてください。"
-            ),
+            ("system", p("translation_evaluation", "persona_generator_system", self.lang)),
+            ("human", p("translation_evaluation", "persona_generator_human", self.lang)),
         ])
         chain = prompt | self.llm
         return chain.invoke({"source_text": source_text})
@@ -112,8 +101,9 @@ class TranslationEvaluator:
 
     SCORING_CRITERIA = ["naturalness", "fluency", "tone_appropriateness", "clarity"]
 
-    def __init__(self, llm: ChatOpenAI):
+    def __init__(self, llm: ChatOpenAI, lang: LanguageCode = "jp"):
         self.llm = llm
+        self.lang = lang
 
     def run(self, source_text: str, translated_text: str, personas: list[TranslationPersona]) -> TranslationEvaluationResult:
         evaluations = []
@@ -140,22 +130,8 @@ class TranslationEvaluator:
 
     def _get_impression(self, source_text: str, translated_text: str, persona: TranslationPersona) -> dict:
         prompt = ChatPromptTemplate.from_messages([
-            (
-                "system",
-                "あなたは{persona_name}です。{persona_background}\n"
-                "年齢層: {age_range}、読書コンテキスト: {reading_context}\n\n"
-                "マーケティング翻訳文を読者として評価してください。"
-            ),
-            (
-                "human",
-                "原文（英語）:\n{source_text}\n\n"
-                "翻訳文（日本語）:\n{translated_text}\n\n"
-                "この翻訳について、あなたの視点から:\n"
-                "1. 全体的な印象を1-2文で述べてください\n"
-                "2. 良いと思った点を1-3個挙げてください\n\n"
-                "以下のJSON形式で回答してください:\n"
-                '{{"impression": "全体的な印象", "positives": ["良い点1", "良い点2"]}}'
-            ),
+            ("system", p("translation_evaluation", "impression_system", self.lang)),
+            ("human", p("translation_evaluation", "impression_human", self.lang)),
         ])
 
         chain = prompt | self.llm | StrOutputParser()
@@ -181,28 +157,8 @@ class TranslationEvaluator:
 
     def _find_issues(self, source_text: str, translated_text: str, persona: TranslationPersona) -> list[TranslationIssue]:
         prompt = ChatPromptTemplate.from_messages([
-            (
-                "system",
-                "あなたは{persona_name}です。{persona_background}\n"
-                "日本語ネイティブとして、翻訳文の不自然な箇所を特定してください。"
-            ),
-            (
-                "human",
-                "原文（英語）:\n{source_text}\n\n"
-                "翻訳文（日本語）:\n{translated_text}\n\n"
-                "不自然に感じる箇所を最大3つ見つけて、それぞれについて改善案を提案してください。\n"
-                "問題がない場合は空の配列を返してください。\n\n"
-                "以下のJSON形式で回答してください:\n"
-                "[\n"
-                '  {{\n'
-                '    "original_phrase": "問題のあるフレーズ",\n'
-                '    "issue_type": "unnatural_phrasing/awkward_word_choice/tone_mismatch/grammatical_error/cultural_inappropriateness",\n'
-                '    "severity": "minor/moderate/major",\n'
-                '    "explanation": "なぜ不自然か",\n'
-                '    "suggested_rewrite": "より自然な表現"\n'
-                '  }}\n'
-                "]"
-            ),
+            ("system", p("translation_evaluation", "issues_system", self.lang)),
+            ("human", p("translation_evaluation", "issues_human", self.lang)),
         ])
 
         chain = prompt | self.llm | StrOutputParser()
@@ -227,22 +183,8 @@ class TranslationEvaluator:
 
     def _generate_scores(self, translated_text: str, persona: TranslationPersona, issues: list[TranslationIssue]) -> dict[str, int]:
         prompt = ChatPromptTemplate.from_messages([
-            (
-                "system",
-                "あなたは{persona_name}として翻訳品質を評価しています。"
-            ),
-            (
-                "human",
-                "翻訳文:\n{translated_text}\n\n"
-                "発見された問題数: {issue_count}\n\n"
-                "以下の基準で1-10点で評価してください:\n"
-                "- naturalness（自然さ）: ネイティブが書いたように読めるか\n"
-                "- fluency（流暢さ）: 文章の流れがスムーズか\n"
-                "- tone_appropriateness（トーンの適切さ）: マーケティング文として適切な調子か\n"
-                "- clarity（明確さ）: 意味が明確に伝わるか\n\n"
-                "JSON形式で回答: "
-                '{{"naturalness": 8, "fluency": 7, "tone_appropriateness": 9, "clarity": 8}}'
-            ),
+            ("system", p("translation_evaluation", "scores_system", self.lang)),
+            ("human", p("translation_evaluation", "scores_human", self.lang)),
         ])
 
         chain = prompt | self.llm | StrOutputParser()
@@ -265,92 +207,87 @@ class TranslationEvaluator:
 
 
 class TranslationReportGenerator:
-    """Generates the final summary report in Japanese."""
+    """Generates the final summary report."""
 
-    def __init__(self, llm: ChatOpenAI):
+    def __init__(self, llm: ChatOpenAI, lang: LanguageCode = "jp"):
         self.llm = llm
+        self.lang = lang
 
     def run(self, source_text: str, translated_text: str, evaluations: list[TranslationEvaluation]) -> str:
-        report = ["# 翻訳評価レポート\n\n"]
+        report = [f"# {t('translation_eval_title', self.lang)}\n\n"]
 
         # Research Outline
-        report.append("## 評価概要\n\n")
-        report.append("**原文（英語）:**\n")
+        report.append(f"## {t('research_outline', self.lang)}\n\n")
+        report.append(f"**{t('source_text', self.lang)}:**\n")
         report.append(f"> {source_text}\n\n")
-        report.append("**翻訳文（日本語）:**\n")
+        report.append(f"**{t('translated_text', self.lang)}:**\n")
         report.append(f"> {translated_text}\n\n")
-        report.append("**評価方法:** 読者視点ペルソナ分析\n\n")
-        report.append(f"**ペルソナ数:** {len(evaluations)}\n\n")
+        report.append(f"**{t('method', self.lang)}:** {t('evaluation_method_translation', self.lang)}\n\n")
+        report.append(f"**{t('number_of_personas', self.lang)}:** {len(evaluations)}\n\n")
 
         # Calculate overall score
         all_scores = {"naturalness": [], "fluency": [], "tone_appropriateness": [], "clarity": []}
-        for eval in evaluations:
+        for ev in evaluations:
             for criterion in all_scores:
-                if criterion in eval.scores:
-                    all_scores[criterion].append(eval.scores[criterion])
+                if criterion in ev.scores:
+                    all_scores[criterion].append(ev.scores[criterion])
 
         avg_scores = {k: sum(v)/len(v) if v else 0 for k, v in all_scores.items()}
         overall_avg = sum(avg_scores.values()) / len(avg_scores) if avg_scores else 0
 
-        report.append(f"**総合スコア:** {overall_avg:.1f}/10\n\n")
+        report.append(f"**{t('overall_score', self.lang)}:** {overall_avg:.1f}/10\n\n")
         report.append("---\n\n")
 
         # Personas section
-        report.append("## 評価ペルソナ\n\n")
-        for i, eval in enumerate(evaluations, 1):
-            p = eval.persona
-            report.append(f"**ペルソナ {i}: {p.name}** ({p.reader_type})\n")
-            report.append(f"- 年齢層: {p.age_range}\n")
-            report.append(f"- 背景: {p.background}\n")
-            report.append(f"- 読書コンテキスト: {p.reading_context}\n\n")
+        report.append(f"## {t('evaluation_personas', self.lang)}\n\n")
+        for i, ev in enumerate(evaluations, 1):
+            persona = ev.persona
+            report.append(f"**{t('persona', self.lang)} {i}: {persona.name}** ({persona.reader_type})\n")
+            report.append(f"- {t('age_range', self.lang)}: {persona.age_range}\n")
+            report.append(f"- {t('background', self.lang)}: {persona.background}\n")
+            report.append(f"- {t('reading_context', self.lang)}: {persona.reading_context}\n\n")
 
         # Evaluation details
-        report.append("## 評価詳細\n\n")
-        for eval in evaluations:
-            report.append(f"### {eval.persona.name}の評価\n\n")
-            report.append(f"**全体的な印象:** {eval.overall_impression}\n\n")
+        report.append(f"## {t('evaluation_details', self.lang)}\n\n")
+        for ev in evaluations:
+            report.append(f"### {ev.persona.name}\n\n")
+            report.append(f"**{t('overall_impression', self.lang)}:** {ev.overall_impression}\n\n")
 
-            if eval.positive_points:
-                report.append("**良い点:**\n")
-                for point in eval.positive_points:
+            if ev.positive_points:
+                report.append(f"**{t('positive_points', self.lang)}:**\n")
+                for point in ev.positive_points:
                     report.append(f"- {point}\n")
                 report.append("\n")
 
-            if eval.issues:
-                report.append("**指摘事項:**\n\n")
-                for issue in eval.issues:
+            if ev.issues:
+                report.append(f"**{t('issues_found', self.lang)}:**\n\n")
+                for issue in ev.issues:
                     severity_icon = {"minor": "🟡", "moderate": "🟠", "major": "🔴"}.get(issue.severity, "⚪")
                     report.append(f"{severity_icon} **{issue.issue_type}** ({issue.severity})\n")
-                    report.append(f"- 原文: 「{issue.original_phrase}」\n")
-                    report.append(f"- 問題点: {issue.explanation}\n")
-                    report.append(f"- 改善案: 「{issue.suggested_rewrite}」\n\n")
+                    report.append(f"- {issue.original_phrase}\n")
+                    report.append(f"- {issue.explanation}\n")
+                    report.append(f"- → {issue.suggested_rewrite}\n\n")
             else:
-                report.append("**指摘事項:** なし（自然な翻訳です）\n\n")
+                report.append(f"**{t('issues_found', self.lang)}:** {t('no_issues', self.lang)}\n\n")
 
         # Scores summary
-        report.append("## スコアサマリー\n\n")
-        criteria_jp = {
-            "naturalness": "自然さ",
-            "fluency": "流暢さ",
-            "tone_appropriateness": "トーン適切さ",
-            "clarity": "明確さ"
-        }
+        report.append(f"## {t('scores_summary', self.lang)}\n\n")
 
-        header = "| 基準 |"
+        header = f"| {t('criteria', self.lang)} |"
         separator = "|------|"
-        for i, eval in enumerate(evaluations, 1):
+        for i, ev in enumerate(evaluations, 1):
             header += f" P{i} |"
             separator += "----|"
-        header += " 平均 |"
+        header += f" {t('avg', self.lang)} |"
         separator += "------|"
         report.append(header + "\n")
         report.append(separator + "\n")
 
         for criterion in ["naturalness", "fluency", "tone_appropriateness", "clarity"]:
-            row = f"| {criteria_jp.get(criterion, criterion)} |"
+            row = f"| {t(criterion, self.lang)} |"
             scores = []
-            for eval in evaluations:
-                score = eval.scores.get(criterion, 5)
+            for ev in evaluations:
+                score = ev.scores.get(criterion, 5)
                 scores.append(score)
                 row += f" {score} |"
             avg = sum(scores) / len(scores) if scores else 0
@@ -359,10 +296,10 @@ class TranslationReportGenerator:
         report.append("\n")
 
         # Consolidated recommendations
-        report.append("## 改善提案まとめ\n\n")
+        report.append(f"## {t('improvement_summary', self.lang)}\n\n")
         all_issues = []
-        for eval in evaluations:
-            for issue in eval.issues:
+        for ev in evaluations:
+            for issue in ev.issues:
                 if issue.suggested_rewrite not in [i["rewrite"] for i in all_issues]:
                     all_issues.append({
                         "original": issue.original_phrase,
@@ -376,9 +313,9 @@ class TranslationReportGenerator:
             all_issues.sort(key=lambda x: severity_order.get(x["severity"], 3))
 
             for i, issue in enumerate(all_issues[:5], 1):
-                report.append(f"{i}. 「{issue['original']}」→「{issue['rewrite']}」\n")
+                report.append(f"{i}. {issue['original']} → {issue['rewrite']}\n")
         else:
-            report.append("改善が必要な箇所はありません。翻訳品質は良好です。\n")
+            report.append(f"{t('no_improvements_needed', self.lang)}\n")
 
         return "".join(report)
 
@@ -386,10 +323,11 @@ class TranslationReportGenerator:
 class TranslationEvaluationAgent:
     """Main agent orchestrating the translation evaluation pipeline."""
 
-    def __init__(self, llm: ChatOpenAI):
-        self.persona_generator = TranslationPersonaGenerator(llm=llm)
-        self.translation_evaluator = TranslationEvaluator(llm=llm)
-        self.report_generator = TranslationReportGenerator(llm=llm)
+    def __init__(self, llm: ChatOpenAI, lang: LanguageCode = "jp"):
+        self.lang = lang
+        self.persona_generator = TranslationPersonaGenerator(llm=llm, lang=lang)
+        self.translation_evaluator = TranslationEvaluator(llm=llm, lang=lang)
+        self.report_generator = TranslationReportGenerator(llm=llm, lang=lang)
         self.graph = self._create_graph()
 
     def _create_graph(self) -> StateGraph:
@@ -429,7 +367,8 @@ class TranslationEvaluationAgent:
     def run(self, source_text: str, translated_text: str) -> str:
         initial_state = TranslationEvaluationState(
             source_text=source_text,
-            translated_text=translated_text
+            translated_text=translated_text,
+            language=self.lang
         )
         final_state = self.graph.invoke(initial_state)
         return final_state["summary_report"]
@@ -442,7 +381,8 @@ def main():
     parser.add_argument("--translation", type=str, help="Japanese translation text")
     parser.add_argument("--translation-file", type=str, help="Path to file containing Japanese translation")
     parser.add_argument("--output-name", type=str, help="Custom output filename (without extension)")
-    parser.add_argument("--model-name", type=str, default="gpt-4.1-mini-2025-04-14", help="OpenAI model name")
+    parser.add_argument("--model-name", type=str, default="gpt-5-mini", help="OpenAI model name")
+    parser.add_argument("--lang", type=str, choices=["en", "jp"], default="jp", help="Output language: en or jp")
     args = parser.parse_args()
 
     # Get source text
@@ -464,8 +404,10 @@ def main():
         parser.error("Either --translation or --translation-file is required")
 
     # Initialize LLM and agent
-    llm = ChatOpenAI(model_name=args.model_name, temperature=0.3)
-    agent = TranslationEvaluationAgent(llm=llm)
+    # GPT-5-mini only supports temperature=1.0
+    temperature = 1.0 if "gpt-5" in args.model_name.lower() else 0.3
+    llm = ChatOpenAI(model_name=args.model_name, temperature=temperature)
+    agent = TranslationEvaluationAgent(llm=llm, lang=args.lang)
 
     # Run evaluation
     report = agent.run(source_text=source_text, translated_text=translated_text)
@@ -484,7 +426,7 @@ def main():
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(report)
 
-    print(f"翻訳評価レポートが '{output_path}' に保存されました。")
+    print(t("report_saved_translation", args.lang).format(path=output_path))
     print("\n" + report)
 
 

@@ -19,7 +19,7 @@ except ImportError:
 ################################################
 
 
-from shared import Persona, Personas
+from shared import Persona, Personas, LanguageCode, t, p
 
 
 # インタビュー内容を表すデータモデル
@@ -38,6 +38,7 @@ class InterviewResult(BaseModel):
 # 要件定義生成AIエージェントのステート
 class InterviewState(BaseModel):
     user_request: str = Field(..., description="クライアントの議題")
+    language: LanguageCode = Field(default="en", description="Output language")
     personas: Annotated[list[Persona], operator.add] = Field(
         default_factory=list, description="生成されたペルソナのリスト"
     )
@@ -50,36 +51,30 @@ class InterviewState(BaseModel):
 
 # ペルソナを生成するクラス
 class PersonaGenerator:
-    def __init__(self, llm: ChatOpenAI, k: int = 10):
+    def __init__(self, llm: ChatOpenAI, k: int = 10, lang: LanguageCode = "en"):
         self.llm = llm.with_structured_output(Personas)
         self.k = k
+        self.lang = lang
 
     def run(self, user_request: str) -> Personas:
         # プロンプトテンプレートを定義
         prompt = ChatPromptTemplate.from_messages(
             [
-                (
-                    "system",
-                    "あなたはユーザーインタビュー用の多様なペルソナを作成する専門家です。",
-                ),
-                (
-                    "human",
-                    f"以下のユーザーリクエストに関するインタビュー用に、{self.k}人の多様なペルソナを生成してください.\n\n"
-                    "トピック: {user_request}\n\n"
-                    "各ペルソナには名前と簡単な背景を含めてください。年齢、性別、職業、トピックに対する知識レベルにおいて多様性を確保してください。",
-                ),
+                ("system", p("user_interview", "persona_generator_system", self.lang)),
+                ("human", p("user_interview", "persona_generator_human", self.lang)),
             ]
         )
         # ペルソナ生成のためのチェーンを作成
         chain = prompt | self.llm
         # ペルソナを生成
-        return chain.invoke({"user_request": user_request})
+        return chain.invoke({"user_request": user_request, "k": self.k})
 
 
 # インタビューを実施するクラス
 class InterviewConductor:
-    def __init__(self, llm: ChatOpenAI):
+    def __init__(self, llm: ChatOpenAI, lang: LanguageCode = "en"):
         self.llm = llm
+        self.lang = lang
 
     def run(self, user_request: str, personas: list[Persona]) -> InterviewResult:
         # 質問を生成
@@ -101,17 +96,8 @@ class InterviewConductor:
         # 質問生成のためのプロンプトを定義
         question_prompt = ChatPromptTemplate.from_messages(
             [
-                (
-                    "system",
-                    "あなたはクライアントの依頼に基づいて適切な質問を生成するユーザーインタビューの専門家です。",
-                ),
-                (
-                    "human",
-                    "以下の議題について、1つの質問を生成してください。\n\n"
-                    "議題: {user_request}\n"
-                    "ペルソナ: {persona_name} - {persona_background}\n\n"
-                    "質問は具体的で、このペルソナの視点から重要な情報を引き出すように設計してください。",
-                ),
+                ("system", p("user_interview", "question_generator_system", self.lang)),
+                ("human", p("user_interview", "question_generator_human", self.lang)),
             ]
         )
         # 質問生成のためのチェーンを作成
@@ -135,11 +121,8 @@ class InterviewConductor:
         # 回答生成のためのプロンプトを定義
         answer_prompt = ChatPromptTemplate.from_messages(
             [
-                (
-                    "system",
-                    "あなたは以下のペルソナとして回答しています:  {persona_name} - {persona_background}",
-                ),
-                ("human", "質問: {question}"),
+                ("system", p("user_interview", "answer_generator_system", self.lang)),
+                ("human", p("user_interview", "answer_generator_human", self.lang)),
             ]
         )
         # 回答生成のためのチェーンを作成
@@ -170,28 +153,29 @@ class InterviewConductor:
 
 # 要件定義書を生成するクラス
 class RequirementsDocumentGenerator:
-    def __init__(self, llm: ChatOpenAI, k: int):
+    def __init__(self, llm: ChatOpenAI, k: int, lang: LanguageCode = "en"):
         self.llm = llm
         self.k = k
+        self.lang = lang
 
     def run(self, user_request: str, personas: list[Persona], interviews: list[Interview]) -> str:
         report = []
 
         # Research Outline
-        report.append("## Research Outline\n\n")
-        report.append(f"**Topic:** {user_request}\n\n")
-        report.append("**Method:** Persona-based User Interview Simulation\n\n")
-        report.append(f"**Number of Personas:** {len(personas)}\n\n")
+        report.append(f"## {t('research_outline', self.lang)}\n\n")
+        report.append(f"**{t('topic', self.lang)}:** {user_request}\n\n")
+        report.append(f"**{t('method', self.lang)}:** {t('interview_method', self.lang)}\n\n")
+        report.append(f"**{t('number_of_personas', self.lang)}:** {len(personas)}\n\n")
         report.append("---\n\n")
 
         # Generated Personas
-        report.append("## Generated Personas\n\n")
+        report.append(f"## {t('generated_personas', self.lang)}\n\n")
         for i, persona in enumerate(personas, 1):
-            report.append(f"**Persona {i}: {persona.name}**\n")
-            report.append(f"- Background: {persona.background}\n\n")
+            report.append(f"**{t('persona', self.lang)} {i}: {persona.name}**\n")
+            report.append(f"- {t('background', self.lang)}: {persona.background}\n\n")
 
         # Interview Details
-        report.append("## Interview Details\n\n")
+        report.append(f"## {t('interview_details', self.lang)}\n\n")
         for interview in interviews:
             report.append(f"### {interview.persona.name}\n")
             report.append(f"*{interview.persona.background}*\n\n")
@@ -208,22 +192,8 @@ class RequirementsDocumentGenerator:
         # プロンプトを定義
         prompt = ChatPromptTemplate.from_messages(
             [
-                (
-                    "system",
-                    "You are an user interview insights analyst.",
-                ),
-                (
-                    "human",
-                    "Build a concise survey report from the answers, quantifying recurring themes.\n\n"
-                    "Theme: {user_request}\n\n"
-                    "Interview Result:\n{interview_results}\n"
-                    "Output structure:\n"
-                    "## Executive Summary\n"
-                    "## Quantitative Stats (theme | mentions | % of {k}) – list top 5‑7 themes\n"
-                    "## Key Qualitative Insights (organised by theme, incl. 1‑2 persona quotes)\n"
-                    "## Recommended Next Actions\n\n"
-                    "Language is to be English\n\n:"
-                ),
+                ("system", p("user_interview", "insights_generator_system", self.lang)),
+                ("human", p("user_interview", "insights_generator_human", self.lang)),
             ]
         )
         # ユーザーインタビューのドキュメントを生成するチェーンを作成
@@ -244,12 +214,12 @@ class RequirementsDocumentGenerator:
 
 # ユーザーインタビューAIエージェントのクラス
 class DocumentationAgent:
-    def __init__(self, llm: ChatOpenAI, k: Optional[int] = None):
+    def __init__(self, llm: ChatOpenAI, k: Optional[int] = None, lang: LanguageCode = "en"):
+        self.lang = lang
         # 各種ジェネレータの初期化
-        self.persona_generator = PersonaGenerator(llm=llm, k=k)
-        self.interview_conductor = InterviewConductor(llm=llm)
-        # self.information_evaluator = InformationEvaluator(llm=llm)
-        self.requirements_generator = RequirementsDocumentGenerator(llm=llm, k=k)
+        self.persona_generator = PersonaGenerator(llm=llm, k=k, lang=lang)
+        self.interview_conductor = InterviewConductor(llm=llm, lang=lang)
+        self.requirements_generator = RequirementsDocumentGenerator(llm=llm, k=k, lang=lang)
 
         # グラフの作成
         self.graph = self._create_graph()
@@ -296,7 +266,7 @@ class DocumentationAgent:
 
     def run(self, user_request: str) -> str:
         # 初期状態の設定
-        initial_state = InterviewState(user_request=user_request)
+        initial_state = InterviewState(user_request=user_request, language=self.lang)
         # グラフの実行
         final_state = self.graph.invoke(initial_state)
         # 最終的な要件定義書の取得
@@ -308,23 +278,26 @@ from datetime import datetime
 # メイン関数
 def main():
     # コマンドライン引数を解析
-    parser = argparse.ArgumentParser(description="ユーザーインタビューAIエージェント")
-    parser.add_argument("--user-request", type=str, required=True, help="ユーザーインタビューの議題")
-    parser.add_argument("--k", type=int, default=10, help="生成するペルソナの人数")
+    parser = argparse.ArgumentParser(description="User Interview AI Agent")
+    parser.add_argument("--user-request", type=str, required=True, help="User interview topic")
+    parser.add_argument("--k", type=int, default=10, help="Number of personas to generate")
     parser.add_argument("--output-name", type=str, help="Custom output filename (without extension)")
-    parser.add_argument("--model-name", type=str, default="gpt-4.1-mini-2025-04-14", help="使用するOpenAIモデル名")
+    parser.add_argument("--model-name", type=str, default="gpt-5-mini", help="OpenAI model name")
+    parser.add_argument("--lang", type=str, choices=["en", "jp"], default="en", help="Output language: en or jp")
     args = parser.parse_args()
 
     # ChatOpenAIモデルを初期化
-    llm = ChatOpenAI(model_name=args.model_name, temperature=0.3)
+    # GPT-5-mini only supports temperature=1.0
+    temperature = 1.0 if "gpt-5" in args.model_name.lower() else 0.3
+    llm = ChatOpenAI(model_name=args.model_name, temperature=temperature)
 
     # 要件定義書生成AIエージェントを初期化
-    agent = DocumentationAgent(llm=llm, k=args.k)
+    agent = DocumentationAgent(llm=llm, k=args.k, lang=args.lang)
     # エージェントを実行して最終的な出力を取得
     final_output = agent.run(user_request=args.user_request)
 
     # Add the title to the output
-    title = f"# User Interview - {args.user_request}\n\n"
+    title = f"# {t('user_interview_title', args.lang)} - {args.user_request}\n\n"
     final_output_with_title = title + final_output
 
     # 出力ディレクトリを作成
@@ -341,7 +314,7 @@ def main():
     output_path = os.path.join(output_dir, file_name)
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(final_output_with_title)
-    print(f"ユーザーインタビューのレポートが '{output_path}' に保存されました。")
+    print(t("report_saved_interview", args.lang).format(path=output_path))
 
     # 最終的な出力を表示
     print(final_output_with_title)

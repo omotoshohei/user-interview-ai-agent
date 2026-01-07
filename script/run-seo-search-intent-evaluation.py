@@ -11,7 +11,7 @@ ChatOpenAI.model_rebuild()
 from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field
 
-from shared import Persona
+from shared import Persona, LanguageCode, t, p
 
 ###### Use dotenv if available ######
 try:
@@ -53,7 +53,7 @@ class Evaluation(BaseModel):
     persona: SearchIntentPersona = Field(..., description="The persona who evaluated")
     dialogue: list[DialogueTurn] = Field(default_factory=list, description="Evaluation dialogue")
     scores: dict[str, int] = Field(default_factory=dict, description="Scores by criteria")
-    suggestions: list[str] = Field(default_factory=list, description="Improvement suggestions")
+    suggestions: list[str] | dict[str, list[str]] = Field(default_factory=list, description="Improvement suggestions")
 
 
 class EvaluationResult(BaseModel):
@@ -67,6 +67,7 @@ class ContentEvaluationState(BaseModel):
     """State for the content evaluation agent."""
     target_keyword: str = Field(..., description="Target keyword for SEO")
     content: str = Field(..., description="Product description to evaluate")
+    language: LanguageCode = Field(default="en", description="Output language")
     personas: Annotated[list[SearchIntentPersona], operator.add] = Field(
         default_factory=list, description="Generated personas"
     )
@@ -78,34 +79,54 @@ class ContentEvaluationState(BaseModel):
 
 # Core Classes
 class SearchIntentPersonaGenerator:
-    """Generates personas based on search intent types."""
+    """Generates fixed personas for SEO content evaluation."""
 
-    def __init__(self, llm: ChatOpenAI):
-        self.llm = llm.with_structured_output(SearchIntentPersonas)
+    def __init__(self, llm: ChatOpenAI, lang: LanguageCode = "en", intents: list[str] = None):
+        self.llm = llm  # Keep for potential future use
+        self.lang = lang
+        self.intent = intents[0] if intents else "informational"  # Use first intent from CLI
 
     def run(self, target_keyword: str) -> SearchIntentPersonas:
-        prompt = ChatPromptTemplate.from_messages([
-            (
-                "system",
-                "You are an expert in user behavior and search intent analysis. "
-                "Generate 3 distinct personas representing different search intents for a product keyword."
+        """Return fixed 3 personas for SEO evaluation."""
+        personas = [
+            SearchIntentPersona(
+                name="Alex Chen" if self.lang == "en" else "田中 誠",
+                background="Marketing Specialist at a company with about 3 years of digital marketing experience. Familiar with digital advertising but lacks deep SEO knowledge and struggles with technical aspects like coding or server configurations." if self.lang == "en" else "事業会社のマーケティング担当者。デジタルマーケティング歴は3年程度。広告運用などの知識はあるがSEOには詳しくなく、特に技術的な内容（テクニカルSEO）には苦手意識を持っている。",
+                intent_type=self.intent,
+                search_query=f"{target_keyword} basics for marketers" if self.lang == "en" else f"{target_keyword} わかりやすく マーケティング",
+                looking_for=[
+                    "Simple explanations without technical jargon" if self.lang == "en" else "専門用語を使わないわかりやすい説明",
+                    "Impact on marketing performance" if self.lang == "en" else "マーケティング成果への影響",
+                    "Actionable items for non-engineers" if self.lang == "en" else "エンジニアでなくても実践できること",
+                    "Checklist for basic improvements" if self.lang == "en" else "基本的な改善チェックリスト",
+                ]
             ),
-            (
-                "human",
-                "Generate 3 personas for the keyword: {keyword}\n\n"
-                "Create one persona for each search intent type:\n"
-                "1. **Informational**: Someone researching to learn about the product category\n"
-                "2. **Navigational/Comparative**: Someone comparing options before deciding\n"
-                "3. **Transactional**: Someone ready to buy, looking for the right offer\n\n"
-                "For each persona, include:\n"
-                "- A realistic name\n"
-                "- Their background and motivation\n"
-                "- An example search query they would use\n"
-                "- A list of 3 specific things they are looking for in the product description (looking_for)\n"
+            SearchIntentPersona(
+                name="Sarah Miller" if self.lang == "en" else "鈴木 花子",
+                background="Small business owner running an e-commerce store for 3 years. Self-taught in digital marketing with limited budget for SEO tools. Looking for practical, cost-effective solutions to improve online visibility." if self.lang == "en" else "Eコマースストアを3年間経営する中小企業オーナー。デジタルマーケティングは独学で習得し、SEOツールへの予算は限られている。オンラインでの認知度向上のため、実用的でコスト効率の良いソリューションを探している。",
+                intent_type=self.intent,
+                search_query=f"{target_keyword} for small business" if self.lang == "en" else f"{target_keyword} 中小企業向け",
+                looking_for=[
+                    "Pricing and affordability" if self.lang == "en" else "価格と手頃さ",
+                    "Ease of use without technical expertise" if self.lang == "en" else "専門知識なしでの使いやすさ",
+                    "Quick wins and actionable tips" if self.lang == "en" else "すぐに実践できるアドバイス",
+                    "Time investment required" if self.lang == "en" else "必要な時間投資",
+                ]
             ),
-        ])
-        chain = prompt | self.llm
-        return chain.invoke({"keyword": target_keyword})
+            SearchIntentPersona(
+                name="Jordan Lee" if self.lang == "en" else "山田 翔太",
+                background="University student who recently started learning SEO and digital marketing. Taking an online course and trying to understand fundamental concepts. No practical experience yet but eager to learn." if self.lang == "en" else "最近SEOとデジタルマーケティングの学習を始めた大学生。オンラインコースを受講中で、基本的な概念を理解しようとしている。実務経験はまだないが、学習意欲は高い。",
+                intent_type=self.intent,
+                search_query=f"what is {target_keyword}" if self.lang == "en" else f"{target_keyword} とは",
+                looking_for=[
+                    "Clear explanations of basic concepts" if self.lang == "en" else "基本概念のわかりやすい説明",
+                    "Beginner-friendly terminology" if self.lang == "en" else "初心者向けの用語説明",
+                    "Step-by-step learning resources" if self.lang == "en" else "ステップバイステップの学習リソース",
+                    "Real-world examples for better understanding" if self.lang == "en" else "理解を深めるための実例",
+                ]
+            ),
+        ]
+        return SearchIntentPersonas(personas=personas)
 
 
 class ContentEvaluator:
@@ -113,8 +134,9 @@ class ContentEvaluator:
 
     SCORING_CRITERIA = ["relevance", "clarity", "completeness", "persuasiveness"]
 
-    def __init__(self, llm: ChatOpenAI):
+    def __init__(self, llm: ChatOpenAI, lang: LanguageCode = "en"):
         self.llm = llm
+        self.lang = lang
 
     def run(self, content: str, personas: list[SearchIntentPersona]) -> EvaluationResult:
         evaluations = []
@@ -142,28 +164,8 @@ class ContentEvaluator:
         looking_for_str = "\n".join([f"- {item}" for item in persona.looking_for]) if persona.looking_for else "- General product information"
 
         prompt = ChatPromptTemplate.from_messages([
-            (
-                "system",
-                "You are {persona_name}, {persona_background}. "
-                "Your search intent is {intent_type}. "
-                "You searched for: \"{search_query}\"\n\n"
-                "You are looking for the following information:\n{looking_for}\n\n"
-                "After reading the product description, answer whether you found what you were looking for. "
-                "Be conversational and specific about what you did or didn't find."
-            ),
-            (
-                "human",
-                "Product Description:\n{content}\n\n"
-                "For each thing you were looking for, respond to the question 'Did you find the information you were looking for?'\n"
-                "Answer naturally, like: 'Yes, I was looking for X and the description clearly explained...' or "
-                "'No, I was hoping to find X but the description didn't mention...'\n\n"
-                "Generate exactly 3 evaluation responses in this JSON format:\n"
-                "[\n"
-                '  {{"question": "Did you find the information about [specific thing]?", "answer": "[Your conversational response about what you found or didn\'t find]", "satisfied": true/false}},\n'
-                '  {{"question": "Did you find the information about [specific thing]?", "answer": "[Your conversational response]", "satisfied": true/false}},\n'
-                '  {{"question": "Did you find the information about [specific thing]?", "answer": "[Your conversational response]", "satisfied": true/false}}\n'
-                "]"
-            ),
+            ("system", p("seo_evaluation", "dialogue_system", self.lang)),
+            ("human", p("seo_evaluation", "dialogue_human", self.lang)),
         ])
 
         chain = prompt | self.llm | StrOutputParser()
@@ -197,22 +199,8 @@ class ContentEvaluator:
 
     def _generate_scores(self, content: str, persona: SearchIntentPersona, dialogue: list[DialogueTurn]) -> dict[str, int]:
         prompt = ChatPromptTemplate.from_messages([
-            (
-                "system",
-                "You are evaluating content from the perspective of {persona_name} ({intent_type} intent). "
-                "Based on the evaluation dialogue, score the content on these criteria (1-10):\n"
-                "- relevance: How well does it match the search intent?\n"
-                "- clarity: How easy is it to understand?\n"
-                "- completeness: Does it answer key questions?\n"
-                "- persuasiveness: Does it motivate action?"
-            ),
-            (
-                "human",
-                "Content:\n{content}\n\n"
-                "Evaluation Dialogue:\n{dialogue}\n\n"
-                "Respond with ONLY a JSON object like: "
-                '{{"relevance": 8, "clarity": 7, "completeness": 6, "persuasiveness": 9}}'
-            ),
+            ("system", p("seo_evaluation", "scores_system", self.lang)),
+            ("human", p("seo_evaluation", "scores_human", self.lang)),
         ])
 
         dialogue_str = "\n".join([
@@ -239,26 +227,21 @@ class ContentEvaluator:
         except (json.JSONDecodeError, KeyError):
             return {c: 5 for c in self.SCORING_CRITERIA}
 
-    def _generate_suggestions(self, content: str, persona: SearchIntentPersona, dialogue: list[DialogueTurn]) -> list[str]:
-        unsatisfied = [t for t in dialogue if not t.satisfied]
+    def _generate_suggestions(self, content: str, persona: SearchIntentPersona, dialogue: list[DialogueTurn]) -> dict[str, list[str]]:
+        unsatisfied = [d for d in dialogue if not d.satisfied]
         if not unsatisfied:
-            return ["Content meets this persona's needs well."]
+            return {"add_topics": [], "rewrite_suggestions": []}
 
         prompt = ChatPromptTemplate.from_messages([
-            (
-                "system",
-                "You are a content optimization expert. Based on the unsatisfied questions, "
-                "provide 1-3 specific, actionable suggestions to improve the content."
-            ),
-            (
-                "human",
-                "Persona: {persona_name} ({intent_type} intent)\n"
-                "Unsatisfied Questions:\n{questions}\n\n"
-                "Provide suggestions as a simple list, one per line, no numbering."
-            ),
+            ("system", p("seo_evaluation", "suggestions_system", self.lang)),
+            ("human", p("seo_evaluation", "suggestions_human", self.lang)),
         ])
 
-        questions_str = "\n".join([f"- {t.question}" for t in unsatisfied])
+        # Include both Question and Answer (Reasoning)
+        questions_str = "\n".join([
+            f"- Q: {t.question}\n  A: {t.answer}" 
+            for t in unsatisfied
+        ])
 
         chain = prompt | self.llm | StrOutputParser()
         result = chain.invoke({
@@ -267,83 +250,97 @@ class ContentEvaluator:
             "questions": questions_str
         })
 
-        return [s.strip() for s in result.strip().split("\n") if s.strip()]
+        import json
+        try:
+            result = result.strip()
+            if result.startswith("```"):
+                result = result.split("```")[1]
+                if result.startswith("json"):
+                    result = result[4:]
+            return json.loads(result)
+        except (json.JSONDecodeError, KeyError):
+            # Fallback
+            return {
+                "add_topics": ["Failed to parse specific suggestions."],
+                "rewrite_suggestions": []
+            }
 
 
 class SummaryReportGenerator:
     """Generates the final summary report."""
 
-    def __init__(self, llm: ChatOpenAI):
+    def __init__(self, llm: ChatOpenAI, lang: LanguageCode = "en"):
         self.llm = llm
+        self.lang = lang
 
     def run(self, target_keyword: str, content: str, evaluations: list[Evaluation]) -> str:
         # Build report sections
-        report = [f"# SEO Search Intent Evaluation Report\n\n"]
+        report = [f"# {t('seo_eval_title', self.lang)}\n\n"]
 
         # Research Outline section
-        report.append("## Research Outline\n\n")
-        report.append(f"**Target Keyword:** {target_keyword}\n\n")
-        report.append("**Content Under Evaluation:**\n")
-        report.append(f"> {content}\n\n")
-        report.append(f"**Evaluation Method:** Search Intent Persona Analysis\n\n")
-        report.append(f"**Number of Personas:** {len(evaluations)}\n\n")
+        report.append(f"## {t('research_outline', self.lang)}\n\n")
+        report.append(f"**{t('target_keyword', self.lang)}:** {target_keyword}\n\n")
+        report.append(f"**{t('content_under_evaluation', self.lang)}:**\n")
+        report.append(f"> {content[:200]}...\n\n")
+        report.append(f"**{t('method', self.lang)}:** {t('evaluation_method_seo', self.lang)}\n\n")
+        report.append(f"**{t('number_of_personas', self.lang)}:** {len(evaluations)}\n\n")
 
         # Calculate overall scores for outline
         all_scores = {"relevance": [], "clarity": [], "completeness": [], "persuasiveness": []}
-        for eval in evaluations:
+        for ev in evaluations:
             for criterion in all_scores:
-                if criterion in eval.scores:
-                    all_scores[criterion].append(eval.scores[criterion])
+                if criterion in ev.scores:
+                    all_scores[criterion].append(ev.scores[criterion])
 
         avg_scores = {k: sum(v)/len(v) if v else 0 for k, v in all_scores.items()}
         overall_avg = sum(avg_scores.values()) / len(avg_scores) if avg_scores else 0
 
-        report.append(f"**Overall Score:** {overall_avg:.1f}/10\n\n")
+        report.append(f"**{t('overall_score', self.lang)}:** {overall_avg:.1f}/10\n\n")
         report.append("---\n\n")
 
         # Personas section
-        report.append("## Personas Generated\n\n")
-        for i, eval in enumerate(evaluations, 1):
-            p = eval.persona
-            report.append(f"**Persona {i}: {p.name}** ({p.intent_type.title()} Intent)\n")
-            report.append(f"- Background: {p.background}\n")
-            report.append(f"- Search Query: \"{p.search_query}\"\n")
-            report.append(f"- Looking for:\n")
-            if p.looking_for:
-                for item in p.looking_for:
+        report.append(f"## {t('personas_generated', self.lang)}\n\n")
+        for i, ev in enumerate(evaluations, 1):
+            persona = ev.persona
+            report.append(f"**{t('persona', self.lang)} {i}: {persona.name}** ({persona.intent_type.title()} Intent)\n")
+            report.append(f"- {t('background', self.lang)}: {persona.background}\n")
+            report.append(f"- {t('search_query', self.lang)}: \"{persona.search_query}\"\n")
+            report.append(f"- {t('looking_for', self.lang)}:\n")
+            if persona.looking_for:
+                for item in persona.looking_for:
                     report.append(f"  - {item}\n")
             report.append("\n")
 
         # Evaluation dialogues
-        report.append("## Evaluation Dialogues\n")
-        for eval in evaluations:
-            report.append(f"### {eval.persona.name} ({eval.persona.intent_type.title()} Intent)\n")
-            for turn in eval.dialogue:
-                status = "satisfied" if turn.satisfied else "NOT satisfied"
+        report.append(f"## {t('evaluation_dialogues', self.lang)}\n")
+        for ev in evaluations:
+            report.append(f"### {ev.persona.name} ({ev.persona.intent_type.title()} Intent)\n")
+            for turn in ev.dialogue:
+                status = t('satisfied', self.lang) if turn.satisfied else t('not_satisfied', self.lang)
                 report.append(f"**Q:** {turn.question}\n")
                 report.append(f"**A:** {turn.answer} ({status})\n\n")
 
         # Scores summary table
-        report.append("## Scores Summary\n")
+        report.append(f"## {t('scores_summary', self.lang)}\n")
         criteria = ["relevance", "clarity", "completeness", "persuasiveness"]
 
         # Header
-        header = "| Criteria |"
+        header = f"| {t('criteria', self.lang)} |"
         separator = "|----------|"
-        for i, eval in enumerate(evaluations, 1):
+        for i, ev in enumerate(evaluations, 1):
             header += f" P{i} |"
             separator += "----|"
-        header += " Avg |"
+        header += f" {t('avg', self.lang)} |"
         separator += "-----|"
         report.append(header + "\n")
         report.append(separator + "\n")
 
         # Rows
         for criterion in criteria:
-            row = f"| {criterion.title()} |"
+            row = f"| {t(criterion, self.lang)} |"
             scores = []
-            for eval in evaluations:
-                score = eval.scores.get(criterion, 5)
+            for ev in evaluations:
+                score = ev.scores.get(criterion, 5)
                 scores.append(score)
                 row += f" {score} |"
             avg = sum(scores) / len(scores) if scores else 0
@@ -352,18 +349,57 @@ class SummaryReportGenerator:
         report.append("\n")
 
         # Recommendations
-        report.append("## Recommendations\n")
-        all_suggestions = []
-        for eval in evaluations:
-            for suggestion in eval.suggestions:
-                if suggestion not in all_suggestions and "meets" not in suggestion.lower():
-                    all_suggestions.append(suggestion)
+        report.append(f"## {t('recommendations', self.lang)}\n")
+        
+        all_add_topics = []
+        all_rewrite_suggestions = []
 
-        if all_suggestions:
-            for i, suggestion in enumerate(all_suggestions[:5], 1):
+        for ev in evaluations:
+            if isinstance(ev.suggestions, dict):
+                # New format
+                if "add_topics" in ev.suggestions:
+                    all_add_topics.extend(ev.suggestions["add_topics"])
+                if "rewrite_suggestions" in ev.suggestions:
+                    all_rewrite_suggestions.extend(ev.suggestions["rewrite_suggestions"])
+            elif isinstance(ev.suggestions, list):
+                # Old format fallback
+                all_rewrite_suggestions.extend(ev.suggestions)
+
+        # De-duplicate while keeping order
+        def dedup(items):
+            seen = set()
+            result = []
+            for item in items:
+                if item not in seen:
+                    result.append(item)
+                    seen.add(item)
+            return result
+
+        unique_add_topics = dedup(all_add_topics)
+        unique_rewrite_suggestions = dedup(all_rewrite_suggestions)
+
+        if self.lang == "jp":
+            report.append(f"### 追加すべきトピック\n")
+        else:
+            report.append(f"### Additional Topics\n")
+        
+        if unique_add_topics:
+            for i, topic in enumerate(unique_add_topics, 1):
+                report.append(f"{i}. {topic}\n")
+        else:
+            report.append("None.\n")
+        report.append("\n")
+
+        if self.lang == "jp":
+            report.append(f"### リライトすべき箇所\n")
+        else:
+            report.append(f"### Rewrite Suggestions\n")
+
+        if unique_rewrite_suggestions:
+            for i, suggestion in enumerate(unique_rewrite_suggestions, 1):
                 report.append(f"{i}. {suggestion}\n")
         else:
-            report.append("No major improvements needed. Content performs well across all personas.\n")
+            report.append("None.\n")
 
         return "".join(report)
 
@@ -371,10 +407,11 @@ class SummaryReportGenerator:
 class ContentEvaluationAgent:
     """Main agent orchestrating the content evaluation pipeline."""
 
-    def __init__(self, llm: ChatOpenAI):
-        self.persona_generator = SearchIntentPersonaGenerator(llm=llm)
-        self.content_evaluator = ContentEvaluator(llm=llm)
-        self.summary_generator = SummaryReportGenerator(llm=llm)
+    def __init__(self, llm: ChatOpenAI, lang: LanguageCode = "en", intents: list[str] = None):
+        self.lang = lang
+        self.persona_generator = SearchIntentPersonaGenerator(llm=llm, lang=lang, intents=intents)
+        self.content_evaluator = ContentEvaluator(llm=llm, lang=lang)
+        self.summary_generator = SummaryReportGenerator(llm=llm, lang=lang)
         self.graph = self._create_graph()
 
     def _create_graph(self) -> StateGraph:
@@ -410,7 +447,8 @@ class ContentEvaluationAgent:
     def run(self, target_keyword: str, content: str) -> str:
         initial_state = ContentEvaluationState(
             target_keyword=target_keyword,
-            content=content
+            content=content,
+            language=self.lang
         )
         final_state = self.graph.invoke(initial_state)
         return final_state["summary_report"]
@@ -418,10 +456,16 @@ class ContentEvaluationAgent:
 
 def main():
     parser = argparse.ArgumentParser(description="SEO Search Intent Evaluation AI Agent")
-    parser.add_argument("--keyword", type=str, required=True, help="Target keyword for SEO")
+    parser.add_argument("--keyword", type=str, help="Target keyword for SEO (will prompt if not provided)")
     parser.add_argument("--content", type=str, help="Product description text")
     parser.add_argument("--content-file", type=str, help="Path to file containing product description")
-    parser.add_argument("--model-name", type=str, default="gpt-4.1-mini-2025-04-14", help="OpenAI model name")
+    parser.add_argument("--model-name", type=str, default="gpt-5-mini", help="OpenAI model name")
+    parser.add_argument("--lang", type=str, choices=["en", "jp"], default="en", help="Output language: en or jp")
+    parser.add_argument("--intent", type=str, nargs="+", 
+                        choices=["informational", "navigational", "transactional"],
+                        default=["informational"],
+                        help="Search intent type(s) to evaluate. Default: informational only (for blog articles)")
+    parser.add_argument("--output-dir", type=str, help="Directory to save the output report")
     args = parser.parse_args()
 
     # Get content from argument or file
@@ -433,26 +477,40 @@ def main():
     else:
         parser.error("Either --content or --content-file is required")
 
+    # Get keyword from argument or prompt
+    if args.keyword:
+        keyword = args.keyword
+    else:
+        prompt_msg = "ターゲットキーワードを入力してください: " if args.lang == "jp" else "Enter the target keyword: "
+        keyword = input(prompt_msg).strip()
+        if not keyword:
+            parser.error("Target keyword is required")
+
     # Initialize LLM and agent
-    llm = ChatOpenAI(model_name=args.model_name, temperature=0.3)
-    agent = ContentEvaluationAgent(llm=llm)
+    # GPT-5-mini only supports temperature=1.0
+    temperature = 1.0 if "gpt-5" in args.model_name.lower() else 0.3
+    llm = ChatOpenAI(model_name=args.model_name, temperature=temperature)
+    agent = ContentEvaluationAgent(llm=llm, lang=args.lang, intents=args.intent)
 
     # Run evaluation
-    report = agent.run(target_keyword=args.keyword, content=content)
+    report = agent.run(target_keyword=keyword, content=content)
 
     # Save output
-    output_dir = "output/seo-evaluation"
+    if args.output_dir:
+        output_dir = args.output_dir
+    else:
+        output_dir = "output/seo-evaluation"
     os.makedirs(output_dir, exist_ok=True)
 
     date_str = datetime.now().strftime("%Y%m%d")
-    keyword_str = args.keyword.lower().replace(' ', '-')
+    keyword_str = keyword.lower().replace(' ', '-')
     file_name = f"{date_str}-eval-{keyword_str}.md"
     output_path = os.path.join(output_dir, file_name)
 
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(report)
 
-    print(f"Evaluation report saved to '{output_path}'")
+    print(t("report_saved_seo", args.lang).format(path=output_path))
     print("\n" + report)
 
 

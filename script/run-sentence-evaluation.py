@@ -11,7 +11,7 @@ ChatOpenAI.model_rebuild()
 from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field
 
-from shared import Persona
+from shared import Persona, LanguageCode, t, p
 
 ###### Use dotenv if available ######
 try:
@@ -60,6 +60,7 @@ class SentenceEvaluationState(BaseModel):
     """State for the sentence evaluation agent."""
     background: str = Field(..., description="Background context for the sentence")
     sentence: str = Field(..., description="The sentence to evaluate")
+    language: LanguageCode = Field(default="en", description="Output language")
     personas: Annotated[list[SentencePersona], operator.add] = Field(
         default_factory=list, description="Generated personas"
     )
@@ -73,28 +74,14 @@ class SentenceEvaluationState(BaseModel):
 class DynamicPersonaGenerator:
     """Generates personas dynamically based on the background context."""
 
-    def __init__(self, llm: ChatOpenAI):
+    def __init__(self, llm: ChatOpenAI, lang: LanguageCode = "en"):
         self.llm = llm.with_structured_output(SentencePersonas)
+        self.lang = lang
 
     def run(self, background: str) -> SentencePersonas:
         prompt = ChatPromptTemplate.from_messages([
-            (
-                "system",
-                "You are an expert at understanding communication contexts and creating relevant reviewer personas. "
-                "Based on the given background, generate 3 diverse personas who would be ideal reviewers for this type of content."
-            ),
-            (
-                "human",
-                "Background context:\n{background}\n\n"
-                "Generate 3 distinct personas who should evaluate content written for this context. "
-                "Each persona should have:\n"
-                "- A realistic name\n"
-                "- A relevant background that makes them a good evaluator\n"
-                "- Their perspective (e.g., 'target audience member', 'skeptical decision-maker', 'busy executive')\n"
-                "- What they focus on when evaluating (e.g., 'clarity and brevity', 'credibility and specifics', 'emotional appeal')\n"
-                "- Why their feedback matters for this context\n\n"
-                "Make the personas diverse - they should bring different viewpoints to the evaluation."
-            ),
+            ("system", p("sentence_evaluation", "persona_generator_system", self.lang)),
+            ("human", p("sentence_evaluation", "persona_generator_human", self.lang)),
         ])
         chain = prompt | self.llm
         return chain.invoke({"background": background})
@@ -105,8 +92,9 @@ class SentenceEvaluator:
 
     SCORING_CRITERIA = ["clarity", "impact", "tone", "persuasiveness"]
 
-    def __init__(self, llm: ChatOpenAI):
+    def __init__(self, llm: ChatOpenAI, lang: LanguageCode = "en"):
         self.llm = llm
+        self.lang = lang
 
     def run(self, background: str, sentence: str, personas: list[SentencePersona]) -> SentenceFeedbackResult:
         feedback_list = []
@@ -131,24 +119,8 @@ class SentenceEvaluator:
 
     def _get_evaluation(self, background: str, sentence: str, persona: SentencePersona) -> dict:
         prompt = ChatPromptTemplate.from_messages([
-            (
-                "system",
-                "You are {persona_name}, {persona_background}.\n"
-                "Your perspective: {perspective}\n"
-                "You focus on: {evaluation_focus}\n\n"
-                "Evaluate the given sentence from your unique viewpoint."
-            ),
-            (
-                "human",
-                "Context: {background}\n\n"
-                "Sentence to evaluate:\n\"{sentence}\"\n\n"
-                "Provide your evaluation in this JSON format:\n"
-                '{{\n'
-                '  "impression": "Your overall impression in 1-2 sentences",\n'
-                '  "strengths": ["strength 1", "strength 2"],\n'
-                '  "weaknesses": ["weakness 1", "weakness 2"]\n'
-                '}}'
-            ),
+            ("system", p("sentence_evaluation", "evaluation_system", self.lang)),
+            ("human", p("sentence_evaluation", "evaluation_human", self.lang)),
         ])
 
         chain = prompt | self.llm | StrOutputParser()
@@ -174,25 +146,8 @@ class SentenceEvaluator:
 
     def _generate_scores(self, background: str, sentence: str, persona: SentencePersona, eval_data: dict) -> dict[str, int]:
         prompt = ChatPromptTemplate.from_messages([
-            (
-                "system",
-                "You are {persona_name} evaluating a sentence. Based on your analysis, score the sentence."
-            ),
-            (
-                "human",
-                "Context: {background}\n"
-                "Sentence: \"{sentence}\"\n\n"
-                "Your evaluation found:\n"
-                "Strengths: {strengths}\n"
-                "Weaknesses: {weaknesses}\n\n"
-                "Score the sentence on these criteria (1-10):\n"
-                "- clarity: Is the meaning immediately understood?\n"
-                "- impact: Does it grab attention / is it memorable?\n"
-                "- tone: Does it match the intended voice for this context?\n"
-                "- persuasiveness: Does it motivate the desired action?\n\n"
-                "Respond with ONLY a JSON object: "
-                '{{"clarity": 8, "impact": 7, "tone": 9, "persuasiveness": 6}}'
-            ),
+            ("system", p("sentence_evaluation", "scores_system", self.lang)),
+            ("human", p("sentence_evaluation", "scores_human", self.lang)),
         ])
 
         chain = prompt | self.llm | StrOutputParser()
@@ -220,16 +175,17 @@ class SentenceEvaluator:
 class SentenceReportGenerator:
     """Generates the final summary report."""
 
-    def __init__(self, llm: ChatOpenAI):
+    def __init__(self, llm: ChatOpenAI, lang: LanguageCode = "en"):
         self.llm = llm
+        self.lang = lang
 
     def run(self, background: str, sentence: str, feedback: list[SentenceFeedback]) -> str:
-        report = ["# Sentence Evaluation Report\n\n"]
+        report = [f"# {t('sentence_eval_title', self.lang)}\n\n"]
 
         # Evaluation Context
-        report.append("## Evaluation Context\n\n")
-        report.append(f"**Background:** {background}\n\n")
-        report.append(f"**Sentence:** \"{sentence}\"\n\n")
+        report.append(f"## {t('evaluation_context', self.lang)}\n\n")
+        report.append(f"**{t('background', self.lang)}:** {background}\n\n")
+        report.append(f"**{t('sentence', self.lang)}:** \"{sentence}\"\n\n")
 
         # Calculate overall score
         all_scores = {"clarity": [], "impact": [], "tone": [], "persuasiveness": []}
@@ -241,51 +197,51 @@ class SentenceReportGenerator:
         avg_scores = {k: sum(v)/len(v) if v else 0 for k, v in all_scores.items()}
         overall_avg = sum(avg_scores.values()) / len(avg_scores) if avg_scores else 0
 
-        report.append(f"**Overall Score:** {overall_avg:.1f}/10\n\n")
+        report.append(f"**{t('overall_score', self.lang)}:** {overall_avg:.1f}/10\n\n")
         report.append("---\n\n")
 
         # Generated Personas
-        report.append("## Generated Personas\n\n")
+        report.append(f"## {t('generated_personas', self.lang)}\n\n")
         for i, fb in enumerate(feedback, 1):
-            p = fb.persona
-            report.append(f"**Persona {i}: {p.name}** ({p.perspective})\n")
-            report.append(f"- Focus: {p.evaluation_focus}\n")
-            report.append(f"- Relevance: {p.relevance}\n\n")
+            persona = fb.persona
+            report.append(f"**{t('persona', self.lang)} {i}: {persona.name}** ({persona.perspective})\n")
+            report.append(f"- {t('focus', self.lang)}: {persona.evaluation_focus}\n")
+            report.append(f"- {t('relevance_reason', self.lang)}: {persona.relevance}\n\n")
 
         # Evaluation Details
-        report.append("## Evaluation Details\n\n")
+        report.append(f"## {t('evaluation_details', self.lang)}\n\n")
         for fb in feedback:
             report.append(f"### {fb.persona.name}\n\n")
-            report.append(f"**Overall Impression:** {fb.overall_impression}\n\n")
+            report.append(f"**{t('overall_impression', self.lang)}:** {fb.overall_impression}\n\n")
 
             if fb.strengths:
-                report.append("**Strengths:**\n")
+                report.append(f"**{t('strengths', self.lang)}:**\n")
                 for strength in fb.strengths:
                     report.append(f"- {strength}\n")
                 report.append("\n")
 
             if fb.weaknesses:
-                report.append("**Weaknesses:**\n")
+                report.append(f"**{t('weaknesses', self.lang)}:**\n")
                 for weakness in fb.weaknesses:
                     report.append(f"- {weakness}\n")
                 report.append("\n")
 
         # Scores Summary
-        report.append("## Scores Summary\n\n")
+        report.append(f"## {t('scores_summary', self.lang)}\n\n")
         criteria = ["clarity", "impact", "tone", "persuasiveness"]
 
-        header = "| Criteria |"
+        header = f"| {t('criteria', self.lang)} |"
         separator = "|----------|"
         for i in range(len(feedback)):
             header += f" P{i+1} |"
             separator += "----|"
-        header += " Avg |"
+        header += f" {t('avg', self.lang)} |"
         separator += "-----|"
         report.append(header + "\n")
         report.append(separator + "\n")
 
         for criterion in criteria:
-            row = f"| {criterion.title()} |"
+            row = f"| {t(criterion, self.lang)} |"
             scores = []
             for fb in feedback:
                 score = fb.scores.get(criterion, 5)
@@ -297,7 +253,7 @@ class SentenceReportGenerator:
         report.append("\n")
 
         # Recommendations
-        report.append("## Recommendations\n\n")
+        report.append(f"## {t('recommendations', self.lang)}\n\n")
         recommendations = self._generate_recommendations(background, sentence, feedback)
         for i, rec in enumerate(recommendations, 1):
             report.append(f"{i}. {rec}\n")
@@ -312,24 +268,11 @@ class SentenceReportGenerator:
             all_weaknesses.extend(fb.weaknesses)
 
         if not all_weaknesses:
-            return ["No specific improvements needed based on the evaluation."]
+            return [t("no_recommendations", self.lang)]
 
         prompt = ChatPromptTemplate.from_messages([
-            (
-                "system",
-                "You are an expert copywriter and communication specialist. "
-                "Based on the feedback from multiple reviewers, generate 3-5 actionable recommendations "
-                "to improve the sentence. Each recommendation should be specific and practical."
-            ),
-            (
-                "human",
-                "Context: {background}\n\n"
-                "Sentence being evaluated: \"{sentence}\"\n\n"
-                "Identified weaknesses from reviewers:\n{weaknesses}\n\n"
-                "Generate 3-5 specific, actionable recommendations to improve this sentence. "
-                "Each recommendation should address one or more weaknesses and be immediately actionable. "
-                "Respond with ONLY a JSON array of strings: [\"recommendation 1\", \"recommendation 2\", ...]"
-            ),
+            ("system", p("sentence_evaluation", "recommendations_system", self.lang)),
+            ("human", p("sentence_evaluation", "recommendations_human", self.lang)),
         ])
 
         chain = prompt | self.llm | StrOutputParser()
@@ -354,10 +297,11 @@ class SentenceReportGenerator:
 class SentenceEvaluationAgent:
     """Main agent orchestrating the sentence evaluation pipeline."""
 
-    def __init__(self, llm: ChatOpenAI):
-        self.persona_generator = DynamicPersonaGenerator(llm=llm)
-        self.sentence_evaluator = SentenceEvaluator(llm=llm)
-        self.report_generator = SentenceReportGenerator(llm=llm)
+    def __init__(self, llm: ChatOpenAI, lang: LanguageCode = "en"):
+        self.lang = lang
+        self.persona_generator = DynamicPersonaGenerator(llm=llm, lang=lang)
+        self.sentence_evaluator = SentenceEvaluator(llm=llm, lang=lang)
+        self.report_generator = SentenceReportGenerator(llm=llm, lang=lang)
         self.graph = self._create_graph()
 
     def _create_graph(self) -> StateGraph:
@@ -397,7 +341,8 @@ class SentenceEvaluationAgent:
     def run(self, background: str, sentence: str) -> str:
         initial_state = SentenceEvaluationState(
             background=background,
-            sentence=sentence
+            sentence=sentence,
+            language=self.lang
         )
         final_state = self.graph.invoke(initial_state)
         return final_state["summary_report"]
@@ -409,7 +354,8 @@ def main():
     parser.add_argument("--background-file", type=str, help="Path to file containing background context")
     parser.add_argument("--sentence", type=str, required=True, help="The sentence to evaluate")
     parser.add_argument("--output-name", type=str, help="Custom output filename (without extension)")
-    parser.add_argument("--model-name", type=str, default="gpt-4.1-mini-2025-04-14", help="OpenAI model name")
+    parser.add_argument("--model-name", type=str, default="gpt-5-mini", help="OpenAI model name")
+    parser.add_argument("--lang", type=str, choices=["en", "jp"], default="en", help="Output language: en or jp")
     args = parser.parse_args()
 
     # Get background
@@ -422,8 +368,10 @@ def main():
         parser.error("Either --background or --background-file is required")
 
     # Initialize LLM and agent
-    llm = ChatOpenAI(model_name=args.model_name, temperature=0.3)
-    agent = SentenceEvaluationAgent(llm=llm)
+    # GPT-5-mini only supports temperature=1.0
+    temperature = 1.0 if "gpt-5" in args.model_name.lower() else 0.3
+    llm = ChatOpenAI(model_name=args.model_name, temperature=temperature)
+    agent = SentenceEvaluationAgent(llm=llm, lang=args.lang)
 
     # Run evaluation
     report = agent.run(background=background, sentence=args.sentence)
@@ -442,7 +390,7 @@ def main():
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(report)
 
-    print(f"Sentence evaluation report saved to '{output_path}'")
+    print(t("report_saved_sentence", args.lang).format(path=output_path))
     print("\n" + report)
 
 

@@ -1,5 +1,6 @@
 # Core LangGraph dependencies
 langchain-openai
+langchain-google-genai
 langgraph
 python-dotenv
 
